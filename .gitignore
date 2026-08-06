@@ -1,6 +1,24 @@
+# Python
 .venv/
+venv/
 __pycache__/
 *.pyc
-.DS_Store
-.cortex/
 *.egg-info/
+
+# OS
+.DS_Store
+
+# Tooling
+.cortex/
+
+# Secrets — never commit these
+connections.toml
+.env
+.env.*
+secrets.toml
+.streamlit/secrets.toml
+*.pem
+*.p8
+*.key
+credentials.json
+service-account*.json

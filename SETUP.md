@@ -54,14 +54,21 @@ This creates:
 
 ### 5. Configure Snowflake Connection
 
-Ensure your `~/.snowflake/connections.toml` has an entry like:
+Create or edit `~/.snowflake/connections.toml` (this file lives **outside** the repo — never commit it):
 
 ```toml
 [SPCS]
-account = "your_account"
+account = "your_account_locator"
 user = "your_user"
-authenticator = "externalbrowser"   # or username_password
+authenticator = "externalbrowser"   # or OAUTH_AUTHORIZATION_CODE, or username_password
 ```
+
+> **Security note:** This repo contains no credentials. All account identifiers, usernames,
+> and service URLs in the documentation are placeholders (`<ACCOUNT>`, `<SERVICE_ID>`,
+> `<YOUR_SNOWFLAKE_USER>`). Substitute your own values locally — do not commit them.
+>
+> `.gitignore` blocks `connections.toml`, `.env`, `secrets.toml`, `*.pem`, and `*.key`
+> as a safety net.
 
 ### 6. Run the Dashboard
 

@@ -6,9 +6,18 @@ Complete record of the Docker container build and Snowpark Container Services (S
 
 ## Live Dashboard
 
-**URL:** https://bjd4a65p-se58322-spcs.snowflakecomputing.app
+**URL pattern:** `https://<SERVICE_ID>-<ACCOUNT>-spcs.snowflakecomputing.app`
 
 Requires Snowflake login. Anyone with access to the service role can view it.
+
+> **Note:** `<ACCOUNT>` and `<SERVICE_ID>` are placeholders. Find your actual values with:
+> ```sql
+> -- Your registry host (contains <ACCOUNT>)
+> SHOW IMAGE REPOSITORIES IN SCHEMA ARR_WAREHOUSE.ARR_ANALYTICS;
+>
+> -- Your live endpoint URL (contains <SERVICE_ID>)
+> SHOW ENDPOINTS IN SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE;
+> ```
 
 ---
 
@@ -16,13 +25,13 @@ Requires Snowflake login. Anyone with access to the service role can view it.
 
 | Component | Value |
 |-----------|-------|
-| Public URL | `https://bjd4a65p-se58322-spcs.snowflakecomputing.app` |
+| Public URL | `https://<SERVICE_ID>-<ACCOUNT>-spcs.snowflakecomputing.app` |
 | Service | `ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE` |
 | Status | READY / Running |
 | Compute Pool | `STREAMLIT_CPU_POOL` (CPU_X64_S, 1–2 nodes) |
 | Image Repository | `ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_REPO` |
 | Image | `arr-dashboard:latest` |
-| Registry | `se58322-spcs.registry.snowflakecomputing.com` |
+| Registry | `<ACCOUNT>-spcs.registry.snowflakecomputing.com` |
 | Port | 8501 (public HTTP) |
 | Query Warehouse | `AI_WH` |
 | Container Resources | 512M–1G memory, 0.5–1 CPU |
@@ -58,7 +67,7 @@ CREATE IMAGE REPOSITORY IF NOT EXISTS ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_
 
 -- Get the registry URL
 SHOW IMAGE REPOSITORIES LIKE 'ARR_DASHBOARD_REPO' IN SCHEMA ARR_WAREHOUSE.ARR_ANALYTICS;
--- Returns: se58322-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo
+-- Returns: <ACCOUNT>-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo
 ```
 
 ---
@@ -198,10 +207,10 @@ This writes credentials into Docker's config so `docker push` works.
 
 ```bash
 docker tag arr-dashboard \
-  se58322-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
+  <ACCOUNT>-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
 
 docker push \
-  se58322-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
+  <ACCOUNT>-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
 ```
 
 Result: `latest: digest: sha256:24c931a3c86fa8851a8905e241eb50f16f745294d4a45a2e5b1bd5e82d044d2f size: 856`
@@ -241,7 +250,7 @@ SELECT SYSTEM$GET_SERVICE_STATUS('ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERV
 
 -- Get the public endpoint (took ~2 min to provision)
 SHOW ENDPOINTS IN SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE;
--- dashboard | 8501 | HTTP | true | bjd4a65p-se58322-spcs.snowflakecomputing.app
+-- dashboard | 8501 | HTTP | true | <SERVICE_ID>-<ACCOUNT>-spcs.snowflakecomputing.app
 ```
 
 ---
@@ -323,14 +332,14 @@ docker build --platform linux/amd64 -t arr-dashboard .
 
 # 2. Retag
 docker tag arr-dashboard \
-  se58322-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
+  <ACCOUNT>-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
 
 # 3. Login (if session expired)
 snow spcs image-registry login --connection SPCS
 
 # 4. Push
 docker push \
-  se58322-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
+  <ACCOUNT>-spcs.registry.snowflakecomputing.com/arr_warehouse/arr_analytics/arr_dashboard_repo/arr-dashboard:latest
 ```
 
 Then in Snowflake:
