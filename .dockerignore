@@ -1,0 +1,11 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.DS_Store
+.cortex/
+sql/
+*.md
+environment.yml
+app.py
+streamlit_app.py
