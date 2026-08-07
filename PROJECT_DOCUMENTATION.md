@@ -1,5 +1,7 @@
 # ARR Dashboard 2.0 — Project Documentation
 
+**Author:** Abhishek Suwalka
+
 ## What We Built
 
 A production-grade **Streamlit dashboard** that replaces Power BI for Annual Recurring Revenue (ARR) analytics. The solution connects live to Snowflake, provides 6 interactive tabs, an AI chatbot, and a full semantic data model — all deployable both locally and natively inside Snowflake (SiS).

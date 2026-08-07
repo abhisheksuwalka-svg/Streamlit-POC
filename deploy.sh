@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================
 # ARR Dashboard - SPCS Deployment Script
+# Author: Abhishek Suwalka
 # =============================================================
 # BEFORE RUNNING: set the two variables below for your account.
 #

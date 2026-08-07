@@ -1,5 +1,7 @@
 # What the ARR Dashboard Does
 
+**Author:** Abhishek Suwalka
+
 ## Overview
 
 The ARR Dashboard 2.0 is a **Power BI replacement** built on Streamlit and Snowflake. It provides real-time Annual Recurring Revenue analytics through an interactive, self-service interface that connects directly to live Snowflake tables — no data exports, no stale CSVs, no manual refreshes.

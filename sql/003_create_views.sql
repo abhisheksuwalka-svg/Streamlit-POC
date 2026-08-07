@@ -3,6 +3,7 @@
 ARR SEMANTIC MODEL - ANALYTICAL VIEWS
 ================================================================================
 Production views for dashboarding, reporting, and semantic layer consumption.
+Author: Abhishek Suwalka
 ================================================================================
 */
 

@@ -1,5 +1,7 @@
 # SPCS Deployment Guide — ARR Dashboard
 
+**Author:** Abhishek Suwalka
+
 Complete record of the Docker container build and Snowpark Container Services (SPCS) deployment.
 
 ---

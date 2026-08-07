@@ -1,5 +1,7 @@
 # ARR Dashboard 2.0 — Implementation Report
 
+**Author:** Abhishek Suwalka
+
 **Project:** Power BI to Streamlit on Snowflake Migration (Proof of Concept)
 **Repository:** `https://github.com/abhisheksuwalka-svg/Streamlit-POC` (branch `develop`)
 **Status:** Complete — deployed and operational

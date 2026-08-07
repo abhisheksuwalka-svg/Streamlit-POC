@@ -1,3 +1,6 @@
+# ARR Dashboard 2.0 - SPCS container image
+# Author: Abhishek Suwalka
+
 FROM python:3.9-slim
 
 WORKDIR /app

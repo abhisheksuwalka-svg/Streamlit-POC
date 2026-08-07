@@ -2,6 +2,8 @@
 ARR Dashboard 2.0 — Replacing Power BI with Real-Time Snowflake Analytics
 Deployed on: Streamlit in Snowflake (SiS)
 Source: ARR_WAREHOUSE.ARR_ANALYTICS
+
+Author: Abhishek Suwalka
 """
 
 import streamlit as st
@@ -682,3 +684,16 @@ with tab6:
         "Cardinality": ["Many:1"] * 16,
     })
     st.dataframe(rel_data, use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#546E7A; font-size:0.85rem; padding:0.75rem 0;'>"
+    "Built by <strong>Abhishek Suwalka</strong> &nbsp;&middot;&nbsp; "
+    "ARR Dashboard 2.0 &nbsp;&middot;&nbsp; Powered by Snowflake + Streamlit"
+    "</div>",
+    unsafe_allow_html=True,
+)

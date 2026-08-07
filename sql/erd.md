@@ -1,5 +1,7 @@
 # ARR Semantic Model - Entity Relationship Diagram
 
+**Author:** Abhishek Suwalka
+
 ## ER Diagram (Mermaid)
 
 ```mermaid

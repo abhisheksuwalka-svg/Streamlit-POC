@@ -4,6 +4,7 @@ ARR SEMANTIC MODEL - SAMPLE DATA
 ================================================================================
 Realistic SaaS ARR data: 20 customers, 8 products, 14 months of activity.
 Period: Feb 2025 - Mar 2026
+Author: Abhishek Suwalka
 ================================================================================
 */
 

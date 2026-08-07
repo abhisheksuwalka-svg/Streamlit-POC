@@ -7,7 +7,7 @@ No external dependencies. Production-ready star schema.
 
 Schema: ARR_ANALYTICS
 Tables: 12
-Author: Senior Data Architect
+Author: Abhishek Suwalka
 ================================================================================
 */
 

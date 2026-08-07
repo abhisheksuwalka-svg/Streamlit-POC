@@ -4,6 +4,7 @@ ARR SEMANTIC MODEL - SEMANTIC LAYER
 ================================================================================
 Power BI / Streamlit-ready star schema views with pre-defined measures,
 hierarchies, and display-friendly column names.
+Author: Abhishek Suwalka
 ================================================================================
 */
 
