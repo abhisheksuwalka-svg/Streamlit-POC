@@ -28,12 +28,21 @@ warnings.filterwarnings("ignore")
 #                creates ARR_WH if you need one.
 # SF_ROLE        Leave as "" to use your account's default role.
 #                Only set this if you specifically need a named role.
+#
+# SF_DEMO        Controls where data comes from:
+#                  unset  Try Snowflake, fall back to bundled data
+#                         in data/ if the connection fails.
+#                  "1"    Force demo mode. No Snowflake needed at all.
+#                  "0"    Force live mode. Error instead of falling back.
 # =============================================================
 SF_CONNECTION = os.environ.get("SF_CONNECTION", "SPCS")
 SF_DATABASE   = os.environ.get("SF_DATABASE",   "ARR_WAREHOUSE")
 SF_SCHEMA     = os.environ.get("SF_SCHEMA",     "ARR_ANALYTICS")
 SF_WAREHOUSE  = os.environ.get("SF_WAREHOUSE",  "AI_WH")
 SF_ROLE       = os.environ.get("SF_ROLE",       "SYSADMIN")
+SF_DEMO       = os.environ.get("SF_DEMO",       "")
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 # =============================================================
 # PAGE CONFIG
@@ -121,9 +130,74 @@ def get_connection():
     return snowflake.connector.connect(**params)
 
 
+@st.cache_resource
+def get_demo_connection():
+    """Load the bundled Parquet files into an in-memory DuckDB database.
+
+    Each file in data/ is registered under its own name, so the same SQL the app
+    sends to Snowflake also runs here. Regenerate the files with:
+        python3 scripts/export_demo_data.py
+    """
+    import glob
+    import duckdb
+
+    files = sorted(glob.glob(os.path.join(DATA_DIR, "*.parquet")))
+    if not files:
+        raise FileNotFoundError(
+            f"No bundled data found in {DATA_DIR}. "
+            "Run: python3 scripts/export_demo_data.py"
+        )
+
+    con = duckdb.connect(database=":memory:")
+    for path in files:
+        name = os.path.splitext(os.path.basename(path))[0]
+        con.register(name, pd.read_parquet(path))
+    return con
+
+
+# The Data Catalog tab queries Snowflake's INFORMATION_SCHEMA, which has no
+# equivalent in DuckDB. The export script materialises those result sets as
+# CATALOG_* tables, so in demo mode we point the query at them instead.
+# Longest names first so partial matches cannot fire.
+_CATALOG_REWRITES = [
+    (f"{SF_DATABASE}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS", "CATALOG_CONSTRAINTS"),
+    (f"{SF_DATABASE}.INFORMATION_SCHEMA.COLUMNS",           "CATALOG_COLUMNS"),
+    (f"{SF_DATABASE}.INFORMATION_SCHEMA.TABLES",            "CATALOG_TABLES"),
+]
+
+
+@st.cache_resource
+def resolve_data_source():
+    """Decide whether to read from Snowflake or the bundled data.
+
+    Returns (mode, detail) where mode is "live" or "demo".
+    """
+    if SF_DEMO == "1":
+        return "demo", "SF_DEMO=1"
+    try:
+        get_connection()
+        return "live", SF_CONNECTION
+    except Exception as exc:
+        if SF_DEMO == "0":
+            raise
+        return "demo", str(exc).split("\n")[0][:160]
+
+
 @st.cache_data(ttl=300)
 def run_query(query):
-    """Execute a query and return a pandas DataFrame."""
+    """Execute a query and return a pandas DataFrame.
+
+    Routes to Snowflake or to the bundled DuckDB database depending on the
+    resolved data source.
+    """
+    mode, _ = resolve_data_source()
+
+    if mode == "demo":
+        sql = query
+        for snowflake_name, local_name in _CATALOG_REWRITES:
+            sql = sql.replace(snowflake_name, local_name)
+        return get_demo_connection().execute(sql).fetchdf()
+
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -249,10 +323,27 @@ with st.sidebar:
 # HEADER
 # =============================================================
 st.markdown('<p class="dashboard-title">ARR Dashboard 2.0 — Replacing Power BI with Real-Time Snowflake Analytics</p>', unsafe_allow_html=True)
-st.markdown('<p class="dashboard-subtitle">Live from Snowflake | ARR_WAREHOUSE.ARR_ANALYTICS</p>', unsafe_allow_html=True)
+
+_mode, _detail = resolve_data_source()
+if _mode == "live":
+    st.markdown(f'<p class="dashboard-subtitle">Live from Snowflake | {SF_DATABASE}.{SF_SCHEMA}</p>', unsafe_allow_html=True)
+else:
+    st.markdown('<p class="dashboard-subtitle">Demo mode | Bundled sample data</p>', unsafe_allow_html=True)
+    if SF_DEMO == "1":
+        st.info(
+            "**Demo mode.** Reading the bundled snapshot in `data/` — not connected to "
+            "Snowflake. Everything works except the AI Assistant, which falls back to a "
+            "rule-based engine instead of Cortex. To connect to Snowflake, unset `SF_DEMO` "
+            "and set your details in the CONFIGURATION block at the top of `app.py`."
+        )
+    else:
+        st.warning(
+            f"**Could not reach Snowflake — showing bundled sample data instead.** "
+            f"The figures below come from `data/`, not a live query. Reason: `{_detail}`"
+        )
 
 if not connection_ok:
-    st.error(f"Failed to connect to Snowflake: {error_msg}")
+    st.error(f"Failed to load data: {error_msg}")
     st.stop()
 
 

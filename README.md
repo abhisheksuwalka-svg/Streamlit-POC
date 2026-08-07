@@ -19,6 +19,8 @@ natural-language questions.
 - **14 months of data** (Feb 2025 – Mar 2026), ARR growing $2.38M → $2.95M
 - **AI assistant** powered by Snowflake Cortex — ask questions in plain English
 - **3 deployment modes** — local, Streamlit in Snowflake, or containerised on SPCS
+- **Runs with no Snowflake account** — a bundled data snapshot means you can clone and
+  run it in 2 minutes ([Route A](#route-a--run-instantly-no-snowflake-needed))
 
 ---
 
@@ -28,30 +30,91 @@ natural-language questions.
 
 | | Go to |
 |---|---|
-| I have access to the project owner's Snowflake account | [Route A](#route-a--open-the-live-url) or [Route B](#route-b--run-it-on-your-laptop) |
-| I have my **own** Snowflake account, but not the owner's | **[Route D](#route-d--set-it-up-in-your-own-snowflake-account)** ← most people |
-| I have no Snowflake access at all | Get a [free trial](https://signup.snowflake.com/) (30 days, no card), then Route D |
-
-Route D builds a complete independent copy. The SQL scripts are fully
-self-contained — no external dependencies, no reference to any other database — so the
-whole model rebuilds in any account in about 15 minutes.
+| I have **no Snowflake access** and just want to see it running | **[Route A](#route-a--run-instantly-no-snowflake-needed)** ← easiest |
+| I have access to the project owner's Snowflake account | [Route B](#route-b--open-the-live-url) or [Route C](#route-c--run-it-on-your-laptop) |
+| I have my **own** Snowflake account and want live data | [Route E](#route-e--set-it-up-in-your-own-snowflake-account) |
 
 ---
 
 # Part 1 — Access the Dashboard
 
-Pick one of four routes.
+Pick one of five routes.
 
-| Route | Time | Need Python? | Choose this if… |
+| Route | Time | Snowflake needed? | Choose this if… |
 |---|---|---|---|
-| **A** — Open the live URL | 1 min | No | You have access to the owner's account |
-| **B** — Run on your laptop | 10 min | Yes | Same, plus you want to change code |
-| **C** — Your own Snowsight copy | 5 min | No | You want to share with your team |
-| **D** — Your own Snowflake account | 15 min | Yes | **You don't have the owner's account** |
+| **A** — Run on bundled data | 2 min | **No** | **You just want to see and edit it** |
+| **B** — Open the live URL | 1 min | Owner's account | You have access to the owner's account |
+| **C** — Run on your laptop | 10 min | Owner's account | Same, plus you want to change code |
+| **D** — Your own Snowsight copy | 5 min | Owner's account | You want to share with your team |
+| **E** — Your own Snowflake account | 15 min | Your own | You want live data in your own account |
 
 ---
 
-## Route A — Open the live URL
+## Route A — Run instantly, no Snowflake needed
+
+The repo ships with a snapshot of the data in `data/`, so the dashboard runs with no
+account, no credentials, and no permissions. **This is the fastest way to see it and the
+easiest way to make changes.**
+
+**Requirements:** Python 3.9 or newer, and Git. That's all.
+
+```bash
+# 1. Clone
+git clone https://github.com/abhisheksuwalka-svg/Streamlit-POC.git
+cd Streamlit-POC
+git checkout develop
+
+# 2. Virtual environment
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows
+
+# 3. Install
+pip install -r requirements.txt
+
+# 4. Run in demo mode
+SF_DEMO=1 streamlit run app.py
+```
+
+Opens at **http://localhost:8501** with a banner confirming it's using bundled data.
+
+**What works:** all six tabs, every chart, every filter, the full Data Catalog. The numbers
+are identical to the live Snowflake figures — they were exported from it.
+
+**What differs:** the AI Assistant uses a rule-based engine instead of Snowflake Cortex.
+It answers questions on ARR totals, retention, churn, top customers, regions, and
+summaries, but it isn't a real language model.
+
+**Windows users** — set the variable separately:
+
+```powershell
+$env:SF_DEMO = "1"
+streamlit run app.py
+```
+
+### Making changes in this mode
+
+Edit `app.py` and save — Streamlit reloads automatically. Charts, colours, layout, and
+filters are all editable with no Snowflake involvement.
+
+Queries work too. Demo mode runs real SQL against the bundled data via DuckDB, so if you
+add a visual that needs a new query, it just works:
+
+```python
+df = run_query("SELECT REGION, SUM(CURRENT_ARR) AS ARR FROM V_ARR_BY_CUSTOMER GROUP BY REGION")
+```
+
+### Refreshing the bundled data
+
+Only needed if the Snowflake model changes, and only someone with access can do it:
+
+```bash
+python3 scripts/export_demo_data.py
+```
+
+---
+
+## Route B — Open the live URL
 
 The dashboard is already running. Nothing to install.
 
@@ -74,7 +137,7 @@ That's it.
 
 ---
 
-## Route B — Run it on your laptop
+## Route C — Run it on your laptop
 
 Use this if you plan to make changes.
 
@@ -144,7 +207,7 @@ Opens at **http://localhost:8501**
 
 ---
 
-## Route C — Deploy your own Snowsight copy
+## Route D — Deploy your own Snowsight copy
 
 Runs inside Snowflake. No local setup, no credentials, no role to edit.
 
@@ -174,7 +237,7 @@ can't go dark unexpectedly.
 
 ---
 
-## Route D — Set it up in your own Snowflake account
+## Route E — Set it up in your own Snowflake account
 
 Use this if you don't have access to the owner's account. You'll build a complete,
 independent copy — you won't depend on anyone else's environment or availability.
@@ -388,7 +451,7 @@ GRANT USAGE  ON WAREHOUSE AI_WH                                  TO ROLE ARR_DAS
 -- Needed for the AI Assistant tab
 GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE ARR_DASHBOARD_VIEWER;
 
--- Needed only for Route A (the live URL)
+-- Needed only for Route B (the live URL)
 USE ROLE ACCOUNTADMIN;
 GRANT USAGE ON SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE
     TO ROLE ARR_DASHBOARD_VIEWER;
@@ -429,7 +492,7 @@ Allow a minute or two after resuming before the endpoint responds.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Object does not exist or not authorized` | No grants, or wrong account | Run the [grant block](#getting-access), or use [Route D](#route-d--set-it-up-in-your-own-snowflake-account) |
+| `Object does not exist or not authorized` | No grants, or wrong account | Run the [grant block](#getting-access), or use [Route E](#route-e--set-it-up-in-your-own-snowflake-account) |
 | `Cannot perform CREATE SCHEMA` | Ran `001` before `000` | Run `sql/000_setup_account.sql` first |
 | `Role 'SYSADMIN' is not granted to this user` | Wrong role in config | Set `SF_ROLE` to `""` in the CONFIGURATION block |
 | Live URL won't load | Service suspended | [Resume it](#start-and-stop-the-service) |
@@ -437,6 +500,9 @@ Allow a minute or two after resuming before the endpoint responds.
 | AI Assistant tab errors | Missing Cortex privilege | `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER` |
 | Retention tab shows 100% every month | Sample-data artifact | Known limitation, not a bug |
 | `Port 8501 is already in use` | Another Streamlit running | `lsof -ti:8501 \| xargs kill -9` |
+| `No bundled data found in .../data` | `data/` missing or empty | Re-clone, or run `scripts/export_demo_data.py` |
+| Yellow "Could not reach Snowflake" banner | Connection failed, fell back to bundled data | Fix your connection, or use `SF_DEMO=1` to silence it |
+| `ModuleNotFoundError: duckdb` | Dependencies out of date | `pip install -r requirements.txt` |
 | `docker: command not found` | Docker Desktop not running | Start Docker Desktop |
 
 ---
@@ -456,6 +522,10 @@ Streamlit-POC/
 │   ├── 003_create_views.sql    7 analytical views
 │   ├── 004_semantic_layer.sql  5 semantic views
 │   └── erd.md                  ER diagram
+│
+├── data/                       Bundled snapshot for demo mode (22 Parquet files)
+├── scripts/
+│   └── export_demo_data.py     Regenerates data/ from Snowflake
 │
 ├── Dockerfile                  SPCS container image
 ├── spec.yaml                   SPCS service spec
@@ -489,6 +559,9 @@ Streamlit-POC/
 - **Retention figures are flat.** GRR reads 100% for 13 of 14 months — a data generation
   artifact, not a calculation error.
 - **Three app files to keep in sync.** A change to one doesn't propagate to the others.
+- **Demo mode data is a point-in-time snapshot.** It matches Snowflake exactly as of the
+  last export, but won't reflect later changes until `scripts/export_demo_data.py` is re-run.
+- **Demo mode has no Cortex.** The AI Assistant falls back to a rule-based engine.
 
 ---
 
