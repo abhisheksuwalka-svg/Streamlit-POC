@@ -24,22 +24,30 @@ natural-language questions.
 
 ## Before you start
 
-You need a **Snowflake account login** with access to `ARR_WAREHOUSE.ARR_ANALYTICS`.
+**Which situation are you in?**
 
-If you get `Object does not exist or not authorized`, you don't have access yet — jump to
-[Getting access](#getting-access).
+| | Go to |
+|---|---|
+| I have access to the project owner's Snowflake account | [Route A](#route-a--open-the-live-url) or [Route B](#route-b--run-it-on-your-laptop) |
+| I have my **own** Snowflake account, but not the owner's | **[Route D](#route-d--set-it-up-in-your-own-snowflake-account)** ← most people |
+| I have no Snowflake access at all | Get a [free trial](https://signup.snowflake.com/) (30 days, no card), then Route D |
+
+Route D builds a complete independent copy. The SQL scripts are fully
+self-contained — no external dependencies, no reference to any other database — so the
+whole model rebuilds in any account in about 15 minutes.
 
 ---
 
 # Part 1 — Access the Dashboard
 
-Pick one of three routes.
+Pick one of four routes.
 
 | Route | Time | Need Python? | Choose this if… |
 |---|---|---|---|
-| **A** — Open the live URL | 1 min | No | You just want to look at it |
-| **B** — Run on your laptop | 10 min | Yes | You want to change the code |
+| **A** — Open the live URL | 1 min | No | You have access to the owner's account |
+| **B** — Run on your laptop | 10 min | Yes | Same, plus you want to change code |
 | **C** — Your own Snowsight copy | 5 min | No | You want to share with your team |
+| **D** — Your own Snowflake account | 15 min | Yes | **You don't have the owner's account** |
 
 ---
 
@@ -106,16 +114,22 @@ user = "your_user"
 authenticator = "externalbrowser"
 ```
 
-**Step 5.** Set your role. **Don't skip this — it's the most common failure.**
+**Step 5.** Set your role and warehouse.
 
-Open `app.py` and go to **line 95**:
+Open `app.py` and find the **CONFIGURATION** block near the top (around line 32):
 
 ```python
-role="SYSADMIN",
+SF_CONNECTION = os.environ.get("SF_CONNECTION", "SPCS")
+SF_DATABASE   = os.environ.get("SF_DATABASE",   "ARR_WAREHOUSE")
+SF_SCHEMA     = os.environ.get("SF_SCHEMA",     "ARR_ANALYTICS")
+SF_WAREHOUSE  = os.environ.get("SF_WAREHOUSE",  "AI_WH")
+SF_ROLE       = os.environ.get("SF_ROLE",       "SYSADMIN")
 ```
 
-If you don't have `SYSADMIN`, change it to a role you actually hold. Otherwise the app
-will fail on startup with a permissions error.
+Change the defaults to match your account:
+- `SF_CONNECTION` — the profile name you used in `connections.toml`
+- `SF_WAREHOUSE` — any warehouse you can use
+- `SF_ROLE` — set to `""` to just use your default role
 
 **Step 6.** Run it.
 
@@ -157,6 +171,110 @@ snowflake-snowpark-python
 
 This route is the best option for business users — there's no container to suspend, so it
 can't go dark unexpectedly.
+
+---
+
+## Route D — Set it up in your own Snowflake account
+
+Use this if you don't have access to the owner's account. You'll build a complete,
+independent copy — you won't depend on anyone else's environment or availability.
+
+**Requirements:** Python 3.9+, Git, and any Snowflake account where you can create a
+database. A [free trial](https://signup.snowflake.com/) works (30 days, no card required).
+
+### Step 1 — Clone and install
+
+```bash
+git clone https://github.com/abhisheksuwalka-svg/Streamlit-POC.git
+cd Streamlit-POC
+git checkout develop
+
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows
+
+pip install -r requirements.txt
+```
+
+### Step 2 — Build the data in your account
+
+In Snowsight, open a SQL worksheet and run these **five scripts in order**. Open each
+file from the `sql/` folder, paste the contents in, and run it.
+
+| Order | File | Creates |
+|---|---|---|
+| 1 | `sql/000_setup_account.sql` | Database `ARR_WAREHOUSE` + warehouse `ARR_WH` |
+| 2 | `sql/001_create_schema.sql` | 12 tables with keys |
+| 3 | `sql/002_insert_sample_data.sql` | 14 months of sample data |
+| 4 | `sql/003_create_views.sql` | 7 analytical views |
+| 5 | `sql/004_semantic_layer.sql` | 5 semantic views |
+
+> **Run `000` first.** The other scripts assume the database already exists. Skipping it
+> gives you `Cannot perform CREATE SCHEMA. This session does not have a current database.`
+
+If `USE ROLE SYSADMIN` at the top of `000` fails, change it to a role you hold that can
+create databases. On a trial account, `ACCOUNTADMIN` works.
+
+Confirm it loaded — this should return **14**:
+
+```sql
+SELECT COUNT(*) FROM ARR_WAREHOUSE.ARR_ANALYTICS.FACT_ARR_METRICS;
+```
+
+### Step 3 — Configure your connection
+
+Create `~/.snowflake/connections.toml`. This lives outside the repo and must never be
+committed:
+
+```toml
+[myaccount]
+account = "your_account_locator"
+user = "your_user"
+authenticator = "externalbrowser"
+```
+
+> Your account locator is in the Snowsight URL, or run `SELECT CURRENT_ACCOUNT();`
+
+### Step 4 — Point the app at your account
+
+Open `app.py`, find the **CONFIGURATION** block near the top, and set:
+
+```python
+SF_CONNECTION = os.environ.get("SF_CONNECTION", "myaccount")   # your profile name
+SF_DATABASE   = os.environ.get("SF_DATABASE",   "ARR_WAREHOUSE")
+SF_SCHEMA     = os.environ.get("SF_SCHEMA",     "ARR_ANALYTICS")
+SF_WAREHOUSE  = os.environ.get("SF_WAREHOUSE",  "ARR_WH")      # created by script 000
+SF_ROLE       = os.environ.get("SF_ROLE",       "")            # "" = your default role
+```
+
+Or leave the file alone and pass them as environment variables:
+
+```bash
+SF_CONNECTION=myaccount SF_WAREHOUSE=ARR_WH SF_ROLE= streamlit run app.py
+```
+
+### Step 5 — Run it
+
+```bash
+streamlit run app.py
+```
+
+Opens at **http://localhost:8501**
+
+### Note on the AI Assistant tab
+
+Tabs 1–4 and 6 work immediately. Tab 5 needs Cortex access:
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE <your_role>;
+```
+
+Cortex isn't available in every region. If it errors, the other five tabs are unaffected.
+
+### Cost
+
+Negligible. `ARR_WH` is XSMALL and auto-suspends after 60 seconds, and the dataset is
+roughly 200 rows. On a trial account this runs inside the free credits.
 
 ---
 
@@ -311,8 +429,9 @@ Allow a minute or two after resuming before the endpoint responds.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Object does not exist or not authorized` | No grants on the schema | Run the [grant block](#getting-access) |
-| `Role 'SYSADMIN' is not granted to this user` | Hardcoded role | Change `app.py` line 95 |
+| `Object does not exist or not authorized` | No grants, or wrong account | Run the [grant block](#getting-access), or use [Route D](#route-d--set-it-up-in-your-own-snowflake-account) |
+| `Cannot perform CREATE SCHEMA` | Ran `001` before `000` | Run `sql/000_setup_account.sql` first |
+| `Role 'SYSADMIN' is not granted to this user` | Wrong role in config | Set `SF_ROLE` to `""` in the CONFIGURATION block |
 | Live URL won't load | Service suspended | [Resume it](#start-and-stop-the-service) |
 | First query hangs a few seconds | Warehouse was asleep | Normal — it's waking up |
 | AI Assistant tab errors | Missing Cortex privilege | `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER` |
@@ -331,6 +450,7 @@ Streamlit-POC/
 ├── spcs_app.py                 SPCS container version
 │
 ├── sql/
+│   ├── 000_setup_account.sql   Database + warehouse (run first)
 │   ├── 001_create_schema.sql   12 tables, keys, comments
 │   ├── 002_insert_sample_data.sql
 │   ├── 003_create_views.sql    7 analytical views

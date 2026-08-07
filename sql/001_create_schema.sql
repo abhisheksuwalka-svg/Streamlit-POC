@@ -14,6 +14,8 @@ Author: Abhishek Suwalka
 -- ============================================================================
 -- SCHEMA
 -- ============================================================================
+USE DATABASE ARR_WAREHOUSE;
+
 CREATE SCHEMA IF NOT EXISTS ARR_ANALYTICS
     COMMENT = 'Production ARR semantic model for recurring revenue analytics';
 

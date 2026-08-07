@@ -7,6 +7,7 @@ Author: Abhishek Suwalka
 ================================================================================
 */
 
+USE DATABASE ARR_WAREHOUSE;
 USE SCHEMA ARR_ANALYTICS;
 
 

@@ -6,12 +6,34 @@ Tabs: Summary & Trends | ARR Breakdown | Sales Rep | Retention & Churn | AI Assi
 Author: Abhishek Suwalka
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import snowflake.connector
 import warnings
 warnings.filterwarnings("ignore")
+
+# =============================================================
+# CONFIGURATION - EDIT THIS BLOCK TO RUN IN YOUR OWN ACCOUNT
+# =============================================================
+# These are the ONLY values you need to change. Each can also be
+# overridden with an environment variable of the same name, so you
+# can leave this file untouched if you prefer:
+#
+#   SF_CONNECTION=MYCONN SF_WAREHOUSE=ARR_WH streamlit run app.py
+#
+# SF_CONNECTION  Name of the profile in ~/.snowflake/connections.toml
+# SF_WAREHOUSE   Any warehouse you can use. 000_setup_account.sql
+#                creates ARR_WH if you need one.
+# SF_ROLE        Leave as "" to use your account's default role.
+#                Only set this if you specifically need a named role.
+# =============================================================
+SF_CONNECTION = os.environ.get("SF_CONNECTION", "SPCS")
+SF_DATABASE   = os.environ.get("SF_DATABASE",   "ARR_WAREHOUSE")
+SF_SCHEMA     = os.environ.get("SF_SCHEMA",     "ARR_ANALYTICS")
+SF_WAREHOUSE  = os.environ.get("SF_WAREHOUSE",  "AI_WH")
+SF_ROLE       = os.environ.get("SF_ROLE",       "SYSADMIN")
 
 # =============================================================
 # PAGE CONFIG
@@ -86,15 +108,17 @@ st.markdown("""
 # =============================================================
 @st.cache_resource
 def get_connection():
-    """Connect to Snowflake using SPCS connection from connections.toml."""
-    conn = snowflake.connector.connect(
-        connection_name="SPCS",
-        database="ARR_WAREHOUSE",
-        schema="ARR_ANALYTICS",
-        warehouse="AI_WH",
-        role="SYSADMIN",
-    )
-    return conn
+    """Connect to Snowflake using the settings in the CONFIGURATION block above."""
+    params = {
+        "connection_name": SF_CONNECTION,
+        "database": SF_DATABASE,
+        "schema": SF_SCHEMA,
+        "warehouse": SF_WAREHOUSE,
+    }
+    # Only pass role if one was specified; otherwise Snowflake uses the default.
+    if SF_ROLE:
+        params["role"] = SF_ROLE
+    return snowflake.connector.connect(**params)
 
 
 @st.cache_data(ttl=300)
