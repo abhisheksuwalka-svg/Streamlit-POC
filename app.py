@@ -115,9 +115,14 @@ st.markdown("""
 # =============================================================
 # SNOWFLAKE CONNECTION
 # =============================================================
-@st.cache_resource
+@st.cache_resource(ttl=1800)
 def get_connection():
-    """Connect to Snowflake using the settings in the CONFIGURATION block above."""
+    """Connect to Snowflake using the settings in the CONFIGURATION block above.
+
+    TTL forces a periodic rebuild so an expired auth token does not linger in the
+    cache. Without it, a connection cached at startup keeps being reused after its
+    token expires, producing error 390114.
+    """
     params = {
         "connection_name": SF_CONNECTION,
         "database": SF_DATABASE,
@@ -166,16 +171,40 @@ _CATALOG_REWRITES = [
 ]
 
 
-@st.cache_resource
+# Snowflake signals an expired or invalid session token with these codes.
+_TOKEN_ERROR_MARKERS = (
+    "390114",  # Authentication token has expired
+    "390195",  # Session token expired
+    "390318",  # OAuth access token expired
+    "authentication token has expired",
+    "session token has expired",
+)
+
+
+def _is_token_expired(exc):
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TOKEN_ERROR_MARKERS)
+
+
+@st.cache_resource(ttl=600)
 def resolve_data_source():
     """Decide whether to read from Snowflake or the bundled data.
 
-    Returns (mode, detail) where mode is "live" or "demo".
+    Returns (mode, detail) where mode is "live" or "demo". TTL means an expired
+    token eventually triggers a re-probe rather than being cached indefinitely.
     """
     if SF_DEMO == "1":
         return "demo", "SF_DEMO=1"
     try:
-        get_connection()
+        conn = get_connection()
+        # connect() alone can succeed against a stale cached object, so issue a
+        # trivial query to confirm the session is genuinely usable.
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            cur.close()
         return "live", SF_CONNECTION
     except Exception as exc:
         if SF_DEMO == "0":
@@ -183,12 +212,25 @@ def resolve_data_source():
         return "demo", str(exc).split("\n")[0][:160]
 
 
+def _execute_live(query):
+    """Run a query against Snowflake and return a DataFrame."""
+    cur = get_connection().cursor()
+    try:
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=columns)
+    finally:
+        cur.close()
+
+
 @st.cache_data(ttl=300)
 def run_query(query):
     """Execute a query and return a pandas DataFrame.
 
     Routes to Snowflake or to the bundled DuckDB database depending on the
-    resolved data source.
+    resolved data source. If a live query fails because the token expired,
+    reconnect once; if that also fails, fall back to the bundled data rather
+    than showing the user an error.
     """
     mode, _ = resolve_data_source()
 
@@ -198,15 +240,23 @@ def run_query(query):
             sql = sql.replace(snowflake_name, local_name)
         return get_demo_connection().execute(sql).fetchdf()
 
-    conn = get_connection()
-    cur = conn.cursor()
     try:
-        cur.execute(query)
-        columns = [desc[0] for desc in cur.description]
-        data = cur.fetchall()
-        return pd.DataFrame(data, columns=columns)
-    finally:
-        cur.close()
+        return _execute_live(query)
+    except Exception as exc:
+        if not _is_token_expired(exc):
+            raise
+        # Drop the stale connection and the cached mode, then retry once.
+        get_connection.clear()
+        resolve_data_source.clear()
+        try:
+            return _execute_live(query)
+        except Exception:
+            if SF_DEMO == "0":
+                raise
+            sql = query
+            for snowflake_name, local_name in _CATALOG_REWRITES:
+                sql = sql.replace(snowflake_name, local_name)
+            return get_demo_connection().execute(sql).fetchdf()
 
 
 # =============================================================

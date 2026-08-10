@@ -83,7 +83,10 @@ st.markdown("""
 # =============================================================
 # SNOWFLAKE CONNECTION (SPCS - token-based auth)
 # =============================================================
-@st.cache_resource
+# SPCS rotates the OAuth token file periodically. A connection built with an old
+# token eventually fails with 390114. TTL forces a rebuild every hour so the token
+# never gets stale enough to expire mid-session.
+@st.cache_resource(ttl=3600)
 def get_connection():
     """Connect to Snowflake using SPCS OAuth token (injected by container runtime)."""
     token_path = "/snowflake/session/token"
@@ -111,18 +114,47 @@ def get_connection():
     return conn
 
 
-@st.cache_data(ttl=300)
-def run_query(query):
-    """Execute a query and return a pandas DataFrame."""
-    conn = get_connection()
-    cur = conn.cursor()
+# Snowflake signals an expired or invalid session token with these codes.
+_TOKEN_ERROR_MARKERS = (
+    "390114",  # Authentication token has expired
+    "390195",  # Session token expired
+    "authentication token has expired",
+    "session token has expired",
+    "invalid oauth access token",
+)
+
+
+def _is_token_expired(exc):
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TOKEN_ERROR_MARKERS)
+
+
+def _execute(query):
+    """Run a query on the current connection and return a DataFrame."""
+    cur = get_connection().cursor()
     try:
         cur.execute(query)
         columns = [desc[0] for desc in cur.description]
-        data = cur.fetchall()
-        return pd.DataFrame(data, columns=columns)
+        return pd.DataFrame(cur.fetchall(), columns=columns)
     finally:
         cur.close()
+
+
+@st.cache_data(ttl=300)
+def run_query(query):
+    """Execute a query and return a pandas DataFrame.
+
+    If the cached connection's token has expired, drop it and reconnect once.
+    SPCS keeps /snowflake/session/token current, so rebuilding picks up a fresh
+    token without restarting the service.
+    """
+    try:
+        return _execute(query)
+    except Exception as exc:
+        if not _is_token_expired(exc):
+            raise
+        get_connection.clear()
+        return _execute(query)
 
 
 # =============================================================
