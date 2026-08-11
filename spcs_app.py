@@ -542,115 +542,269 @@ with tab5:
     st.markdown('<p style="color:#666;font-size:12px;margin-bottom:16px;">Ask questions about your ARR data. Powered by Snowflake Cortex AI.</p>', unsafe_allow_html=True)
 
     def build_context():
+        """Assemble the data the model can reason over.
+
+        The previous version sent only headline totals, so the model could not
+        answer anything requiring detail. This sends the full monthly series,
+        every customer, and breakdowns by region, segment and movement type.
+        Still small enough to fit comfortably in the model's context window.
+        """
         if metrics.empty:
             return "No data loaded."
+
         parts = []
         latest = metrics.iloc[-1]
-        parts.append(f"Period: {metrics.iloc[0]['YEAR_MONTH']} to {latest['YEAR_MONTH']}")
-        parts.append(f"Ending ARR: ${latest['ENDING_ARR']:,.0f}")
+
+        parts.append("=== HEADLINE ===")
+        parts.append(f"Reporting period: {metrics.iloc[0]['YEAR_MONTH']} to {latest['YEAR_MONTH']} ({len(metrics)} months)")
+        parts.append(f"Latest Ending ARR: ${latest['ENDING_ARR']:,.0f}")
+        parts.append(f"Opening ARR: ${metrics.iloc[0]['BEGINNING_ARR']:,.0f}")
+        growth = latest['ENDING_ARR'] - metrics.iloc[0]['BEGINNING_ARR']
+        pct = (growth / metrics.iloc[0]['BEGINNING_ARR'] * 100) if metrics.iloc[0]['BEGINNING_ARR'] else 0
+        parts.append(f"Total growth: ${growth:,.0f} ({pct:+.1f}%)")
         parts.append(f"Total Net New ARR: ${metrics['NET_NEW_ARR'].sum():,.0f}")
         parts.append(f"Total New Business: ${metrics['NEW_BUSINESS_ARR'].sum():,.0f}")
-        parts.append(f"Total Churn: ${metrics['CHURN_ARR'].sum():,.0f}")
         parts.append(f"Total Expansion: ${metrics['EXPANSION_ARR'].sum():,.0f}")
-        parts.append(f"Avg GRR: {metrics['GROSS_RETENTION_RATE'].mean():.1%}")
-        parts.append(f"Avg NRR: {metrics['NET_RETENTION_RATE'].mean():.1%}")
-        parts.append(f"Active Customers: {int(latest['CUSTOMER_COUNT'])}")
+        parts.append(f"Total Contraction: ${metrics['CONTRACTION_ARR'].sum():,.0f}")
+        parts.append(f"Total Churn: ${metrics['CHURN_ARR'].sum():,.0f}")
+        parts.append(f"Average GRR: {metrics['GROSS_RETENTION_RATE'].mean():.1%}")
+        parts.append(f"Average NRR: {metrics['NET_RETENTION_RATE'].mean():.1%}")
+        parts.append(f"Active customers: {int(latest['CUSTOMER_COUNT'])}")
+
+        # Full monthly series so the model can answer trend and per-month questions
+        parts.append("\n=== MONTHLY DETAIL (month | ending ARR | net new | new business | expansion | contraction | churn | GRR | NRR | customers) ===")
+        for _, r in metrics.iterrows():
+            parts.append(
+                f"{r['YEAR_MONTH']} | ${r['ENDING_ARR']:,.0f} | ${r['NET_NEW_ARR']:,.0f} | "
+                f"${r['NEW_BUSINESS_ARR']:,.0f} | ${r['EXPANSION_ARR']:,.0f} | "
+                f"${r['CONTRACTION_ARR']:,.0f} | ${r['CHURN_ARR']:,.0f} | "
+                f"{r['GROSS_RETENTION_RATE']:.1%} | {r['NET_RETENTION_RATE']:.1%} | {int(r['CUSTOMER_COUNT'])}"
+            )
+
+        best = metrics.loc[metrics['NET_NEW_ARR'].idxmax()]
+        worst = metrics.loc[metrics['NET_NEW_ARR'].idxmin()]
+        parts.append(f"\nStrongest month by net new: {best['YEAR_MONTH']} (${best['NET_NEW_ARR']:,.0f})")
+        parts.append(f"Weakest month by net new: {worst['YEAR_MONTH']} (${worst['NET_NEW_ARR']:,.0f})")
+
         if not customers.empty:
-            parts.append("\nTop Customers by ARR:")
-            top = customers.nlargest(5, "CURRENT_ARR")
-            for _, row in top.iterrows():
-                parts.append(f"  {row['CUSTOMER_NAME']} ({row['REGION']}): ${row['CURRENT_ARR']:,.0f}")
-            region_totals = customers.groupby("REGION")["CURRENT_ARR"].sum().sort_values(ascending=False)
-            parts.append("\nARR by Region:")
-            for region, val in region_totals.items():
-                parts.append(f"  {region}: ${val:,.0f}")
+            parts.append("\n=== CUSTOMERS (name | segment | region | account owner | current ARR) ===")
+            for _, r in customers.sort_values("CURRENT_ARR", ascending=False).iterrows():
+                parts.append(
+                    f"{r['CUSTOMER_NAME']} | {r['SEGMENT']} | {r['REGION']} | "
+                    f"{r.get('ACCOUNT_OWNER', 'n/a')} | ${r['CURRENT_ARR']:,.0f}"
+                )
+
+            parts.append("\n=== ARR BY REGION ===")
+            for k, v in customers.groupby("REGION")["CURRENT_ARR"].sum().sort_values(ascending=False).items():
+                parts.append(f"{k}: ${v:,.0f}")
+
+            parts.append("\n=== ARR BY SEGMENT ===")
+            for k, v in customers.groupby("SEGMENT")["CURRENT_ARR"].sum().sort_values(ascending=False).items():
+                parts.append(f"{k}: ${v:,.0f}")
+
+            if "ACCOUNT_OWNER" in customers.columns:
+                parts.append("\n=== ARR BY ACCOUNT OWNER ===")
+                for k, v in customers.groupby("ACCOUNT_OWNER")["CURRENT_ARR"].sum().sort_values(ascending=False).items():
+                    parts.append(f"{k}: ${v:,.0f}")
+
+        if not movements.empty and "CLASSIFICATION_NAME" in movements.columns:
+            amt = "ARR_CHANGE" if "ARR_CHANGE" in movements.columns else None
+            if amt:
+                parts.append("\n=== MOVEMENT BY TYPE ===")
+                for k, v in movements.groupby("CLASSIFICATION_NAME")[amt].sum().sort_values(ascending=False).items():
+                    parts.append(f"{k}: ${v:,.0f}")
+
         return "\n".join(parts)
+
+    SYSTEM_PROMPT = (
+        "You are an ARR (Annual Recurring Revenue) analyst. Answer using ONLY the data provided below. "
+        "Always quote specific figures from the data. Keep answers to 2-4 sentences unless asked for detail. "
+        "Format currency as $X,XXX and rates as percentages. "
+        "If the data does not contain what is needed, say so plainly rather than guessing. "
+        "Do not invent customers, months or numbers that are not listed."
+    )
 
     def get_response(prompt):
         context = build_context()
         try:
-            # Cortex Complete via SQL in SPCS
-            import json
             prompt_escaped = prompt.replace("'", "''")
             context_escaped = context.replace("'", "''")
-            result = run_query(f"""
-                SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b',
-                    '[SYSTEM]You are an ARR data analyst. Answer concisely based on this data:\n{context_escaped}[/SYSTEM]\n[USER]{prompt_escaped}[/USER]'
-                ) AS RESPONSE
-            """)
-            if not result.empty:
-                return result.iloc[0]["RESPONSE"]
-            return local_answer(prompt)
-        except Exception as e:
-            # Fallback to local analysis
-            return local_answer(prompt)
+            system_escaped = SYSTEM_PROMPT.replace("'", "''")
+            result = run_query(
+                "SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b', '"
+                + f"[SYSTEM]{system_escaped}\n\nDATA:\n{context_escaped}[/SYSTEM]"
+                + f"\n[USER]{prompt_escaped}[/USER]"
+                + "') AS RESPONSE"
+            )
+            if not result.empty and result.iloc[0]["RESPONSE"]:
+                return str(result.iloc[0]["RESPONSE"]).strip()
+        except Exception:
+            pass
+        return local_answer(prompt)
 
     def local_answer(prompt):
+        """Rule-based fallback for when Cortex is unreachable.
+
+        Covers the common question shapes so the assistant still gives a real
+        answer rather than a menu of topics.
+        """
         p = prompt.lower()
         if metrics.empty:
             return "No data available."
         latest = metrics.iloc[-1]
-        if any(k in p for k in ["ending arr", "total arr", "current arr"]):
-            return f"The current Ending ARR is **${latest['ENDING_ARR']:,.0f}** as of {latest['YEAR_MONTH']}."
+        first = metrics.iloc[0]
+
+        def money(v):
+            return f"${v:,.0f}"
+
+        # --- Named customer lookup: check before generic patterns ---
+        if not customers.empty:
+            for _, row in customers.iterrows():
+                name = str(row["CUSTOMER_NAME"])
+                # match on full name or first significant word
+                first_word = name.split()[0].lower()
+                if name.lower() in p or (len(first_word) > 4 and first_word in p):
+                    return (f"**{name}**\n\n"
+                            f"- Current ARR: {money(row['CURRENT_ARR'])}\n"
+                            f"- Segment: {row['SEGMENT']}\n"
+                            f"- Region: {row['REGION']}\n"
+                            f"- Account owner: {row.get('ACCOUNT_OWNER', 'n/a')}")
+
+        # --- Best / worst month ---
+        if any(k in p for k in ["best month", "strongest", "worst month", "weakest", "biggest drop"]):
+            best = metrics.loc[metrics["NET_NEW_ARR"].idxmax()]
+            worst = metrics.loc[metrics["NET_NEW_ARR"].idxmin()]
+            return (f"**Strongest month:** {best['YEAR_MONTH']} at {money(best['NET_NEW_ARR'])} net new\n\n"
+                    f"**Weakest month:** {worst['YEAR_MONTH']} at {money(worst['NET_NEW_ARR'])} net new")
+
+        # --- Growth / trend ---
+        if any(k in p for k in ["growth", "grown", "trend", "trending", "increase", "over time"]):
+            g = latest["ENDING_ARR"] - first["BEGINNING_ARR"]
+            pct = (g / first["BEGINNING_ARR"] * 100) if first["BEGINNING_ARR"] else 0
+            pos = int((metrics["NET_NEW_ARR"] > 0).sum())
+            return (f"ARR grew from {money(first['BEGINNING_ARR'])} ({first['YEAR_MONTH']}) to "
+                    f"{money(latest['ENDING_ARR'])} ({latest['YEAR_MONTH']}) — "
+                    f"{money(g)}, **{pct:+.1f}%**.\n\n"
+                    f"{pos} of {len(metrics)} months had positive net new ARR.")
+
+        # --- Account owner / sales rep ---
+        if any(k in p for k in ["rep", "owner", "sales person", "salesperson", "who owns", "account manager"]):
+            if not customers.empty and "ACCOUNT_OWNER" in customers.columns:
+                t = customers.groupby("ACCOUNT_OWNER")["CURRENT_ARR"].sum().sort_values(ascending=False)
+                lines = ["**ARR by Account Owner:**"]
+                for k, v in t.items():
+                    lines.append(f"- {k}: {money(v)}")
+                return "\n".join(lines)
+
+        # --- Segment ---
+        if any(k in p for k in ["segment", "enterprise", "mid-market", "midmarket", "smb"]):
+            if not customers.empty:
+                t = customers.groupby("SEGMENT")["CURRENT_ARR"].sum().sort_values(ascending=False)
+                lines = ["**ARR by Segment:**"]
+                for k, v in t.items():
+                    lines.append(f"- {k}: {money(v)} ({v / t.sum():.0%})")
+                return "\n".join(lines)
+
+        # --- Region (also catches named regions) ---
+        if any(k in p for k in ["region", "geo", "emea", "apac", "latam", "north america", "country"]):
+            if not customers.empty:
+                t = customers.groupby("REGION")["CURRENT_ARR"].sum().sort_values(ascending=False)
+                lines = ["**ARR by Region:**"]
+                for k, v in t.items():
+                    lines.append(f"- {k}: {money(v)} ({v / t.sum():.0%})")
+                lines.append(f"\nStrongest: {t.index[0]}. Weakest: {t.index[-1]}.")
+                return "\n".join(lines)
+
+        # --- Expansion / upsell ---
+        if any(k in p for k in ["expansion", "upsell", "upgrade", "cross-sell"]):
+            return (f"**Total Expansion ARR:** {money(metrics['EXPANSION_ARR'].sum())}\n"
+                    f"**Total Contraction ARR:** {money(metrics['CONTRACTION_ARR'].sum())}\n"
+                    f"Net of the two: {money(metrics['EXPANSION_ARR'].sum() + metrics['CONTRACTION_ARR'].sum())}")
+
+        # --- Existing patterns ---
+        if any(k in p for k in ["ending arr", "total arr", "current arr", "how much arr", "arr now"]):
+            return f"Current Ending ARR is **{money(latest['ENDING_ARR'])}** as of {latest['YEAR_MONTH']}."
         if any(k in p for k in ["retention", "grr", "nrr"]):
-            return (f"**Latest ({latest['YEAR_MONTH']}):** GRR {latest['GROSS_RETENTION_RATE']:.1%}, NRR {latest['NET_RETENTION_RATE']:.1%}\n\n"
-                    f"**Averages:** GRR {metrics['GROSS_RETENTION_RATE'].mean():.1%}, NRR {metrics['NET_RETENTION_RATE'].mean():.1%}")
-        if any(k in p for k in ["churn", "lost"]):
-            return f"**Total Churn:** ${metrics['CHURN_ARR'].sum():,.0f}\n**Churned Logos:** {int(metrics['CHURNED_CUSTOMERS'].sum())}"
-        if any(k in p for k in ["new logo", "new business", "new customer"]):
-            return f"**Total New Business ARR:** ${metrics['NEW_BUSINESS_ARR'].sum():,.0f}\n**New Customers:** {int(metrics['NEW_CUSTOMERS'].sum())}"
-        if any(k in p for k in ["top customer", "biggest", "largest"]):
+            return (f"**Latest ({latest['YEAR_MONTH']}):** GRR {latest['GROSS_RETENTION_RATE']:.1%}, "
+                    f"NRR {latest['NET_RETENTION_RATE']:.1%}\n\n"
+                    f"**Averages:** GRR {metrics['GROSS_RETENTION_RATE'].mean():.1%}, "
+                    f"NRR {metrics['NET_RETENTION_RATE'].mean():.1%}")
+        if any(k in p for k in ["churn", "lost", "cancel", "attrition"]):
+            return (f"**Total Churn:** {money(metrics['CHURN_ARR'].sum())}\n"
+                    f"**Churned logos:** {int(metrics['CHURNED_CUSTOMERS'].sum())}\n"
+                    f"Churn as % of opening ARR: {abs(metrics['CHURN_ARR'].sum()) / first['BEGINNING_ARR']:.1%}")
+        if any(k in p for k in ["new logo", "new business", "new customer", "acquisition"]):
+            return (f"**Total New Business ARR:** {money(metrics['NEW_BUSINESS_ARR'].sum())}\n"
+                    f"**New customers:** {int(metrics['NEW_CUSTOMERS'].sum())}")
+        if any(k in p for k in ["top customer", "biggest", "largest", "top 5", "top five", "best customer"]):
             if not customers.empty:
                 top5 = customers.nlargest(5, "CURRENT_ARR")
                 lines = ["**Top 5 Customers by ARR:**"]
                 for i, (_, row) in enumerate(top5.iterrows(), 1):
-                    lines.append(f"{i}. {row['CUSTOMER_NAME']} ({row['SEGMENT']}, {row['REGION']}): ${row['CURRENT_ARR']:,.0f}")
+                    lines.append(f"{i}. {row['CUSTOMER_NAME']} ({row['SEGMENT']}, {row['REGION']}): {money(row['CURRENT_ARR'])}")
                 return "\n".join(lines)
-        if any(k in p for k in ["region", "geo"]):
-            if not customers.empty:
-                region_totals = customers.groupby("REGION")["CURRENT_ARR"].sum().sort_values(ascending=False)
-                lines = ["**Current ARR by Region:**"]
-                for region, val in region_totals.items():
-                    lines.append(f"- {region}: ${val:,.0f}")
-                return "\n".join(lines)
-        if any(k in p for k in ["summary", "overview", "how"]):
-            return (f"**ARR Overview ({metrics.iloc[0]['YEAR_MONTH']} – {latest['YEAR_MONTH']}):**\n"
-                    f"- Ending ARR: ${latest['ENDING_ARR']:,.0f}\n"
-                    f"- Net New: ${metrics['NET_NEW_ARR'].sum():,.0f}\n"
-                    f"- New Business: ${metrics['NEW_BUSINESS_ARR'].sum():,.0f}\n"
-                    f"- Expansion: ${metrics['EXPANSION_ARR'].sum():,.0f}\n"
-                    f"- Churn: ${metrics['CHURN_ARR'].sum():,.0f}\n"
+        if any(k in p for k in ["how many customer", "customer count", "number of customer"]):
+            return f"There are **{int(latest['CUSTOMER_COUNT'])}** active customers as of {latest['YEAR_MONTH']}."
+        if any(k in p for k in ["summary", "overview", "how are we", "how is business", "recap"]):
+            return (f"**ARR Overview ({first['YEAR_MONTH']} – {latest['YEAR_MONTH']}):**\n"
+                    f"- Ending ARR: {money(latest['ENDING_ARR'])}\n"
+                    f"- Net New: {money(metrics['NET_NEW_ARR'].sum())}\n"
+                    f"- New Business: {money(metrics['NEW_BUSINESS_ARR'].sum())}\n"
+                    f"- Expansion: {money(metrics['EXPANSION_ARR'].sum())}\n"
+                    f"- Churn: {money(metrics['CHURN_ARR'].sum())}\n"
                     f"- Customers: {int(latest['CUSTOMER_COUNT'])}\n"
                     f"- Avg GRR: {metrics['GROSS_RETENTION_RATE'].mean():.1%}\n"
                     f"- Avg NRR: {metrics['NET_RETENTION_RATE'].mean():.1%}")
-        return ("I can answer about: **Ending ARR**, **Retention rates**, **Churn**, "
-                "**New Business**, **Top customers**, **Regions**, or give a **Summary**.")
 
+        return (
+            f"I could not match that to the data I hold. Currently: Ending ARR "
+            f"{money(latest['ENDING_ARR'])}, {int(latest['CUSTOMER_COUNT'])} customers, "
+            f"avg GRR {metrics['GROSS_RETENTION_RATE'].mean():.1%}.\n\n"
+            "Try asking about: **growth**, **retention**, **churn**, **expansion**, "
+            "**new business**, **top customers**, a **specific customer by name**, "
+            "**by region / segment / account owner**, or **best and worst month**."
+        )
+
+    # --- Chat state ---
     if "messages" not in st.session_state:
         st.session_state.messages = []
+
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-    if prompt := st.chat_input("Ask about your ARR data..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # A question can arrive from the input box or from a suggestion button.
+    # Buttons stash it in session state, so both routes are handled here.
+    pending = st.chat_input("Ask about your ARR data...")
+    if not pending and st.session_state.get("pending_question"):
+        pending = st.session_state.pop("pending_question")
+
+    if pending:
+        st.session_state.messages.append({"role": "user", "content": pending})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(pending)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
-                response = get_response(prompt)
+                response = get_response(pending)
             st.markdown(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.messages.append({"role": "assistant", "content": response})
+
     if not st.session_state.messages:
         st.markdown("---")
         st.markdown('<p style="color:#666;font-size:12px;">Try asking:</p>', unsafe_allow_html=True)
-        suggestions = ["What is our current ending ARR?", "How are retention rates trending?",
-                       "Who are the top 5 customers?", "Give me an ARR summary",
-                       "What does churn look like?", "Break down ARR by region"]
+        suggestions = [
+            "What is our current ending ARR?",
+            "How has ARR grown over the period?",
+            "Which region is weakest and why?",
+            "Who are the top 5 customers?",
+            "What does churn look like?",
+            "Which month was strongest for net new ARR?",
+        ]
         cols = st.columns(3)
         for i, s in enumerate(suggestions):
             with cols[i % 3]:
                 if st.button(s, key=f"sug_{i}", use_container_width=True):
-                    st.session_state.messages.append({"role": "user", "content": s})
+                    st.session_state.pending_question = s
                     st.rerun()
 
 
