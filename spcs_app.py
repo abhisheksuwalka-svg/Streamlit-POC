@@ -271,6 +271,281 @@ subscriptions = data["subscriptions"][
 
 
 # =============================================================
+# CHART DRILL-DOWN
+# =============================================================
+# Charts are rendered with on_select="rerun", so clicking a point reruns the
+# script with the selection attached. These helpers turn that selection into a
+# detail popup.
+#
+# Two guards matter:
+#   1. Streamlit allows only ONE dialog per script run. Selections persist across
+#      reruns, so without a guard, clicking a second chart while the first still
+#      holds a selection would try to open two modals and raise.
+#   2. A selection stays in state after the modal is closed. Without tracking the
+#      last handled value, the modal would immediately reopen on the next rerun.
+
+# Reset on every rerun because Streamlit re-executes the module top to bottom.
+_drill = {"opened": False}
+
+
+def _fmt_money(v):
+    try:
+        return f"${float(v):,.0f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _fmt_pct(v):
+    try:
+        return f"{float(v):.1%}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def clicked_value(event, keys):
+    """Pull the clicked category out of a plotly selection payload.
+
+    The payload shape differs by chart type - bars and lines carry x/y, pies
+    carry label - and Streamlit may hand back dicts or objects. Read defensively
+    and return None rather than raising if the shape is unexpected.
+    """
+    if not event:
+        return None
+    points = None
+    try:
+        sel = event.get("selection") if isinstance(event, dict) else getattr(event, "selection", None)
+        if isinstance(sel, dict):
+            points = sel.get("points")
+        elif sel is not None:
+            points = getattr(sel, "points", None)
+    except Exception:
+        return None
+    if not points:
+        return None
+    p = points[0]
+    for k in keys:
+        v = p.get(k) if isinstance(p, dict) else getattr(p, k, None)
+        if v is not None and v != "":
+            return v
+    return None
+
+
+def maybe_drill(event, key, kind):
+    """Open the appropriate detail dialog if a new point was clicked.
+
+    kind is "month" for time-series charts, or one of "region" / "segment" /
+    "owner" / "movement_type" for categorical charts.
+    """
+    if _drill["opened"]:
+        return
+    # Pies expose "label"; horizontal bars put the category on y; the rest use x.
+    if kind == "movement_type":
+        keys = ("label", "x", "y")
+    elif kind == "month":
+        keys = ("x",)
+    else:
+        keys = ("y", "label", "x")
+
+    value = clicked_value(event, keys)
+    if value is None:
+        return
+
+    state_key = f"_drilled_{key}"
+    if st.session_state.get(state_key) == value:
+        return          # already shown for this point; do not reopen
+    st.session_state[state_key] = value
+
+    _drill["opened"] = True
+    if kind == "month":
+        show_month_detail(str(value))
+    else:
+        show_dimension_detail(kind, str(value))
+
+
+def drill_hint():
+    st.markdown(
+        '<p style="color:#999;font-size:10px;margin-top:-8px;">Click any point for detail</p>',
+        unsafe_allow_html=True,
+    )
+
+
+@st.dialog("Detail", width="large")
+def show_month_detail(month):
+    """Breakdown of a single month: KPIs, then the records that moved ARR."""
+    row = metrics[metrics["YEAR_MONTH"] == month]
+    if row.empty:
+        st.warning(f"No metrics for {month}. It may be excluded by the current filters.")
+        return
+    r = row.iloc[0]
+
+    st.markdown(f"### {month}")
+
+    # Change versus the preceding month in the filtered series
+    idx = metrics.index.get_loc(row.index[0])
+    if idx > 0:
+        prev = metrics.iloc[idx - 1]
+        delta = r["ENDING_ARR"] - prev["ENDING_ARR"]
+        pct = (delta / prev["ENDING_ARR"] * 100) if prev["ENDING_ARR"] else 0
+        st.caption(f"Versus {prev['YEAR_MONTH']}: {_fmt_money(delta)} ({pct:+.1f}%)")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Beginning ARR", _fmt_money(r["BEGINNING_ARR"]))
+    c2.metric("Ending ARR", _fmt_money(r["ENDING_ARR"]))
+    c3.metric("Net New ARR", _fmt_money(r["NET_NEW_ARR"]))
+
+    # All seven components are shown so they visibly sum to Net New ARR.
+    # Omitting Resurrection or FX Adjustment leaves an unexplained gap.
+    c4, c5, c6 = st.columns(3)
+    c4.metric("New Business", _fmt_money(r["NEW_BUSINESS_ARR"]))
+    c5.metric("Expansion", _fmt_money(r["EXPANSION_ARR"]))
+    c6.metric("Contraction", _fmt_money(r["CONTRACTION_ARR"]))
+
+    c7, c8, c9 = st.columns(3)
+    c7.metric("Churn", _fmt_money(r["CHURN_ARR"]))
+    c8.metric("Resurrection", _fmt_money(r.get("RESURRECTION_ARR", 0)))
+    c9.metric("FX Adjustment", _fmt_money(r.get("FX_ADJUSTMENT_ARR", 0)))
+
+    c10, c11, c12 = st.columns(3)
+    c10.metric("GRR", _fmt_pct(r["GROSS_RETENTION_RATE"]))
+    c11.metric("NRR", _fmt_pct(r["NET_RETENTION_RATE"]))
+
+    parts = ["NEW_BUSINESS_ARR", "EXPANSION_ARR", "CONTRACTION_ARR",
+             "CHURN_ARR", "RESURRECTION_ARR", "FX_ADJUSTMENT_ARR"]
+    st.caption(
+        "Beginning ARR + New Business + Expansion + Contraction + Churn + "
+        f"Resurrection + FX = {_fmt_money(r['BEGINNING_ARR'] + sum(float(r.get(p, 0) or 0) for p in parts))} "
+        f"(Ending ARR {_fmt_money(r['ENDING_ARR'])})"
+    )
+
+    st.markdown("---")
+
+    mv = movements[movements["YEAR_MONTH"] == month] if not movements.empty else movements
+    if mv.empty:
+        st.info("No individual movement records for this month under the current filters.")
+        return
+
+    st.markdown(f"**What changed** — {len(mv)} record(s)")
+    cols = [c for c in ["CUSTOMER_NAME", "CLASSIFICATION_NAME", "PRODUCT_NAME",
+                        "PRIOR_ARR", "CURRENT_ARR", "ARR_DELTA", "MOVEMENT_REASON"]
+            if c in mv.columns]
+    detail = mv[cols].sort_values("ARR_DELTA").rename(columns={
+        "CUSTOMER_NAME": "Customer", "CLASSIFICATION_NAME": "Type",
+        "PRODUCT_NAME": "Product", "PRIOR_ARR": "Prior ARR",
+        "CURRENT_ARR": "Current ARR", "ARR_DELTA": "Change",
+        "MOVEMENT_REASON": "Reason",
+    })
+    for c in ["Prior ARR", "Current ARR", "Change"]:
+        if c in detail.columns:
+            detail[c] = detail[c].apply(_fmt_money)
+    st.dataframe(detail, use_container_width=True, hide_index=True)
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if "REGION" in mv.columns:
+            st.markdown("**By region**")
+            g = mv.groupby("REGION")["ARR_DELTA"].sum().sort_values()
+            st.dataframe(
+                pd.DataFrame({"Region": g.index, "Change": [_fmt_money(v) for v in g.values]}),
+                use_container_width=True, hide_index=True)
+    with b2:
+        if "SEGMENT" in mv.columns:
+            st.markdown("**By segment**")
+            g = mv.groupby("SEGMENT")["ARR_DELTA"].sum().sort_values()
+            st.dataframe(
+                pd.DataFrame({"Segment": g.index, "Change": [_fmt_money(v) for v in g.values]}),
+                use_container_width=True, hide_index=True)
+
+
+@st.dialog("Detail", width="large")
+def show_dimension_detail(kind, value):
+    """Breakdown of one region, segment, account owner, or movement type."""
+    labels = {"region": "Region", "segment": "Segment",
+              "owner": "Account Owner", "movement_type": "Movement Type"}
+    column = {"region": "REGION", "segment": "SEGMENT",
+              "owner": "ACCOUNT_OWNER", "movement_type": "CLASSIFICATION_NAME"}[kind]
+
+    st.markdown(f"### {value}")
+    st.caption(labels.get(kind, kind))
+
+    # --- Movement type is sourced from movements, not customers ---
+    if kind == "movement_type":
+        mv = movements[movements[column] == value] if not movements.empty else movements
+        if mv.empty:
+            st.info("No movement records of this type under the current filters.")
+            return
+        total = mv["ARR_DELTA"].sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total ARR Impact", _fmt_money(total))
+        c2.metric("Records", f"{len(mv):,}")
+        c3.metric("Customers Affected", f"{mv['CUSTOMER_NAME'].nunique():,}")
+
+        st.markdown("---")
+        st.markdown("**Largest contributors**")
+        top = mv.reindex(mv["ARR_DELTA"].abs().sort_values(ascending=False).index).head(10)
+        cols = [c for c in ["CUSTOMER_NAME", "YEAR_MONTH", "PRODUCT_NAME",
+                            "ARR_DELTA", "MOVEMENT_REASON"] if c in top.columns]
+        d = top[cols].rename(columns={
+            "CUSTOMER_NAME": "Customer", "YEAR_MONTH": "Month",
+            "PRODUCT_NAME": "Product", "ARR_DELTA": "Change",
+            "MOVEMENT_REASON": "Reason"})
+        if "Change" in d.columns:
+            d["Change"] = d["Change"].apply(_fmt_money)
+        st.dataframe(d, use_container_width=True, hide_index=True)
+
+        if "YEAR_MONTH" in mv.columns:
+            st.markdown("**By month**")
+            g = mv.groupby("YEAR_MONTH")["ARR_DELTA"].sum()
+            st.dataframe(
+                pd.DataFrame({"Month": g.index, "Change": [_fmt_money(v) for v in g.values]}),
+                use_container_width=True, hide_index=True)
+        return
+
+    # --- Region / segment / owner are sourced from customers ---
+    if customers.empty or column not in customers.columns:
+        st.warning("No customer data available for this selection.")
+        return
+    cust = customers[customers[column] == value]
+    if cust.empty:
+        st.warning(f"No customers found for {value} under the current filters.")
+        return
+
+    total = cust["CURRENT_ARR"].sum()
+    overall = customers["CURRENT_ARR"].sum()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total ARR", _fmt_money(total))
+    c2.metric("Share of ARR", f"{(total / overall):.1%}" if overall else "-")
+    c3.metric("Customers", f"{len(cust):,}")
+    c4.metric("Avg ARR", _fmt_money(total / len(cust)))
+
+    st.markdown("---")
+    st.markdown(f"**Customers** — {len(cust)}")
+    cols = [c for c in ["CUSTOMER_NAME", "INDUSTRY", "SEGMENT", "REGION",
+                        "ACCOUNT_OWNER", "CURRENT_ARR", "ACTIVE_PRODUCTS", "TENURE_MONTHS"]
+            if c in cust.columns and c != column]
+    d = cust[cols].sort_values("CURRENT_ARR", ascending=False).rename(columns={
+        "CUSTOMER_NAME": "Customer", "INDUSTRY": "Industry", "SEGMENT": "Segment",
+        "REGION": "Region", "ACCOUNT_OWNER": "Owner", "CURRENT_ARR": "ARR",
+        "ACTIVE_PRODUCTS": "Products", "TENURE_MONTHS": "Tenure (mo)"})
+    if "ARR" in d.columns:
+        d["ARR"] = d["ARR"].apply(_fmt_money)
+    st.dataframe(d, use_container_width=True, hide_index=True)
+
+    if not movements.empty and column in movements.columns:
+        mv = movements[movements[column] == value]
+        if not mv.empty:
+            st.markdown(f"**ARR movements** — {len(mv)} record(s), net {_fmt_money(mv['ARR_DELTA'].sum())}")
+            cols = [c for c in ["YEAR_MONTH", "CUSTOMER_NAME", "CLASSIFICATION_NAME",
+                                "ARR_DELTA", "MOVEMENT_REASON"] if c in mv.columns]
+            md = mv[cols].sort_values("YEAR_MONTH").rename(columns={
+                "YEAR_MONTH": "Month", "CUSTOMER_NAME": "Customer",
+                "CLASSIFICATION_NAME": "Type", "ARR_DELTA": "Change",
+                "MOVEMENT_REASON": "Reason"})
+            if "Change" in md.columns:
+                md["Change"] = md["Change"].apply(_fmt_money)
+            st.dataframe(md, use_container_width=True, hide_index=True)
+
+
+# =============================================================
 # TABS
 # =============================================================
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -321,7 +596,10 @@ with tab1:
                 plot_bgcolor="#FFF", paper_bgcolor="#FFF",
                 xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                 yaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"), showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t1_ending_arr")
+            drill_hint()
+            maybe_drill(ev, "t1_ending_arr", "month")
 
         with col2:
             st.markdown('<p class="visual-title">Retention Trends</p>', unsafe_allow_html=True)
@@ -335,7 +613,10 @@ with tab1:
                 xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                 yaxis=dict(tickformat=".0%", gridcolor="#E8E8E8", range=[0.8, 1.15]),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t1_retention")
+            drill_hint()
+            maybe_drill(ev, "t1_retention", "month")
 
         col3, col4 = st.columns([3, 2])
         with col3:
@@ -352,7 +633,10 @@ with tab1:
                 xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                 yaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=9)))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t1_arr_types")
+            drill_hint()
+            maybe_drill(ev, "t1_arr_types", "month")
 
         with col4:
             st.markdown('<p class="visual-title">Monthly ARR Waterfall</p>', unsafe_allow_html=True)
@@ -383,7 +667,10 @@ with tab2:
                     hole=0.45, marker=dict(colors=[type_colors.get(t, "#999") for t in type_data["CLASSIFICATION_NAME"]]),
                     textinfo="label+percent", textfont=dict(size=10))])
                 fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="#FFF", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                ev = st.plotly_chart(fig, use_container_width=True,
+                                     on_select="rerun", selection_mode="points", key="t2_move_type")
+                drill_hint()
+                maybe_drill(ev, "t2_move_type", "movement_type")
 
         with col2:
             st.markdown('<p class="visual-title">Current ARR by Region</p>', unsafe_allow_html=True)
@@ -392,7 +679,10 @@ with tab2:
                 fig = go.Figure(go.Bar(x=region_data["CURRENT_ARR"], y=region_data["REGION"], orientation="h", marker_color=COLORS["blue"]))
                 fig.update_layout(height=280, margin=dict(l=110, r=20, t=10, b=30),
                     plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"))
-                st.plotly_chart(fig, use_container_width=True)
+                ev = st.plotly_chart(fig, use_container_width=True,
+                                     on_select="rerun", selection_mode="points", key="t2_region")
+                drill_hint()
+                maybe_drill(ev, "t2_region", "region")
 
         with col3:
             st.markdown('<p class="visual-title">Current ARR by Segment</p>', unsafe_allow_html=True)
@@ -401,7 +691,10 @@ with tab2:
                 fig = go.Figure(go.Bar(x=seg_data["CURRENT_ARR"], y=seg_data["SEGMENT"], orientation="h", marker_color=COLORS["dark_blue"]))
                 fig.update_layout(height=280, margin=dict(l=110, r=20, t=10, b=30),
                     plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"))
-                st.plotly_chart(fig, use_container_width=True)
+                ev = st.plotly_chart(fig, use_container_width=True,
+                                     on_select="rerun", selection_mode="points", key="t2_segment")
+                drill_hint()
+                maybe_drill(ev, "t2_segment", "segment")
 
         st.markdown('<p class="visual-title">Monthly ARR by Classification Group</p>', unsafe_allow_html=True)
         if not movements.empty:
@@ -416,7 +709,10 @@ with tab2:
                 plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                 yaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t2_class_monthly")
+            drill_hint()
+            maybe_drill(ev, "t2_class_monthly", "month")
 
 
 # =============================================================
@@ -435,7 +731,10 @@ with tab3:
             fig.update_layout(height=350, margin=dict(l=120, r=20, t=10, b=30),
                 plot_bgcolor="#FFF", paper_bgcolor="#FFF",
                 xaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"), yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t3_owner_arr")
+            drill_hint()
+            maybe_drill(ev, "t3_owner_arr", "owner")
 
         with col2:
             st.markdown('<p class="visual-title">Customers per Account Owner</p>', unsafe_allow_html=True)
@@ -444,7 +743,10 @@ with tab3:
             fig = go.Figure(go.Bar(x=owner_counts["CUSTOMERS"], y=owner_counts["ACCOUNT_OWNER"], orientation="h", marker_color=COLORS["blue"]))
             fig.update_layout(height=350, margin=dict(l=120, r=20, t=10, b=30),
                 plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(gridcolor="#E8E8E8"), yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t3_owner_count")
+            drill_hint()
+            maybe_drill(ev, "t3_owner_count", "owner")
 
         st.markdown('<p class="visual-title">ARR Movements by Account Owner</p>', unsafe_allow_html=True)
         if not movements.empty:
@@ -504,7 +806,10 @@ with tab4:
                 plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                 yaxis=dict(tickformat=".0%", gridcolor="#E8E8E8"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=9)))
-            st.plotly_chart(fig, use_container_width=True)
+            ev = st.plotly_chart(fig, use_container_width=True,
+                                 on_select="rerun", selection_mode="points", key="t4_retention")
+            drill_hint()
+            maybe_drill(ev, "t4_retention", "month")
 
         with col2:
             st.markdown('<p class="visual-title">Monthly Churn ($)</p>', unsafe_allow_html=True)
@@ -513,7 +818,10 @@ with tab4:
                 fig.update_layout(height=300, margin=dict(l=50, r=20, t=10, b=50),
                     plot_bgcolor="#FFF", paper_bgcolor="#FFF", xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
                     yaxis=dict(tickformat="$,.0s", gridcolor="#E8E8E8"))
-                st.plotly_chart(fig, use_container_width=True)
+                ev = st.plotly_chart(fig, use_container_width=True,
+                                     on_select="rerun", selection_mode="points", key="t4_churn")
+                drill_hint()
+                maybe_drill(ev, "t4_churn", "month")
 
         st.markdown('<p class="visual-title">Subscription Renewal Risk Pipeline</p>', unsafe_allow_html=True)
         if not subscriptions.empty:
