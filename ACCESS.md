@@ -22,12 +22,13 @@ There are three ways in. Pick based on what you need.
 
 The dashboard is already running on Snowpark Container Services. Nothing to install.
 
-1. Get the URL from the project owner, or run:
+1. Open **https://bjd4a65p-se58322-spcs.snowflakecomputing.app**
+   If that link has changed, get the current one with:
    ```sql
    SHOW ENDPOINTS IN SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE;
    ```
-2. Open the `ingress_url` in a browser.
-3. Log in with your Snowflake credentials when prompted.
+   and open the `ingress_url` in a browser.
+2. Log in with your Snowflake credentials when prompted.
 
 **Requirements:** a Snowflake account login, plus `USAGE` on the service (see
 [Granting Access](#granting-access-to-others) below).

@@ -8,6 +8,9 @@ natural-language questions.
 
 **Author:** Abhishek Suwalka
 
+**Live dashboard:** https://bjd4a65p-se58322-spcs.snowflakecomputing.app
+(sign in with your Snowflake account — see [Route B](#route-b--open-the-live-url))
+
 ---
 
 ## What's inside
@@ -118,19 +121,20 @@ python3 scripts/export_demo_data.py
 
 The dashboard is already running. Nothing to install.
 
-**Step 1.** Get the URL. Ask the project owner, or run this in Snowsight:
+**Step 1.** Open this link:
 
-```sql
-SHOW ENDPOINTS IN SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE;
-```
+**https://bjd4a65p-se58322-spcs.snowflakecomputing.app**
 
-Copy the value in the `ingress_url` column.
-
-**Step 2.** Paste it into your browser, prefixed with `https://`
-
-**Step 3.** Log in with your Snowflake credentials when prompted.
+**Step 2.** Log in with your Snowflake credentials when prompted.
 
 That's it.
+
+> **Not working?** If the link has changed, get the current one by running this in Snowsight
+> and copying the `ingress_url` column:
+>
+> ```sql
+> SHOW ENDPOINTS IN SERVICE ARR_WAREHOUSE.ARR_ANALYTICS.ARR_DASHBOARD_SERVICE;
+> ```
 
 > **Page won't load?** The service is probably suspended to save credits. Ask the owner to
 > resume it, or see [Start / stop the service](#start-and-stop-the-service).
